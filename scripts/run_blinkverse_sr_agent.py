@@ -108,6 +108,20 @@ def histogram_task(values: np.ndarray, x_name: str, y_name: str, bins: int, log_
     return {x_name: centers[mask]}, {y_name: counts[mask]}
 
 
+def energy_rate_task(values: np.ndarray, bins: int, observing_hours: float = 59.5):
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values) & (values > 0)]
+    if len(values) < max(10, bins):
+        raise ValueError(f"Not enough positive finite energy values for Figure 2 task: {len(values)}")
+    log_edges = np.linspace(np.log10(values.min()), np.log10(values.max()), bins + 1)
+    edges = 10 ** log_edges
+    counts, _ = np.histogram(values, bins=edges)
+    centers = np.sqrt(edges[:-1] * edges[1:])
+    rate = counts / observing_hours
+    mask = np.isfinite(rate) & (rate > 0)
+    return {"energy_erg": centers[mask]}, {"burst_rate_h_per_energy_bin": rate[mask]}
+
+
 def build_task(args):
     path = Path(args.data_dir) / "analysis_single.flattened.csv"
     if not path.exists():
@@ -117,12 +131,17 @@ def build_task(args):
     if args.task == "nature2021_energy_distribution":
         df = bursts[(bursts["source"] == "FRB20121102A") & (bursts["telescope"] == "FAST")].copy()
         energy = as_numeric(df["energy"]).to_numpy(dtype=float)
-        X, y = histogram_task(energy, x_name="log10_energy_erg", y_name="energy_density", bins=args.bins)
+        X, y = energy_rate_task(energy, bins=args.bins)
         problem = (
             "Nature 2021 reported that FAST bursts from repeating source FRB20121102A "
-            "have a bimodal isotropic-equivalent energy distribution.  Fit a simple, "
-            "interpretable density formula energy_density = f(log10_energy_erg). "
-            "A good expression should reveal whether one component is insufficient."
+            "have a bimodal isotropic-equivalent energy distribution.  The data here "
+            "follows the paper's Figure 2 bottom-panel setup: the feature energy_erg "
+            "is the geometric center of a logarithmic energy bin in erg, and the target "
+            "burst_rate_h_per_energy_bin is the number of bursts in that bin divided by "
+            "the 59.5 h FAST observing time.  Fit a simple, interpretable formula "
+            "burst_rate_h_per_energy_bin = f(energy_erg).  A good expression should "
+            "reveal whether one component is insufficient.  If a base-10 logarithm is "
+            "useful, write it as log(energy_erg) / log(10)."
         )
         return X, y, problem
     elif args.task == "nature2021_waiting_time":

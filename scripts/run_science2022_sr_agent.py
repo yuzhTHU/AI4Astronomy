@@ -15,6 +15,10 @@ Two intended modes:
 Here ``sigma_rm`` is fitted per source from ``a = 2*sigma_rm**2`` and then
 broadcast to each row.  This is deliberately not a grouped-parameter SR
 implementation; evaluate_formula only sees ordinary columns.
+
+If ``--with_p0`` is also passed, the per-source intercept is exposed as a
+baseline polarization column.  The expected source-normalized form becomes
+``p0 * exp(-2 * sigma_rm**2 * lambda_m**4)``.
 """
 
 from __future__ import annotations
@@ -48,6 +52,7 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--input_csv", type=str, default="data/science2022/science2022_polarization_sr.csv")
     parser.add_argument("--source", default="FRB20121102A", help="Use a source name, or 'all'.")
     parser.add_argument("--with_sigma_rm", action="store_true", help="Fit correct per-source sigma_rm and expose it as a feature.")
+    parser.add_argument("--with_p0", action="store_true", help="With --with_sigma_rm, also expose the fitted per-source baseline polarization p0.")
     parser.add_argument("--seed", type=int, default=-1, help="Random seed. Default -1 means using current system time.")
     parser.add_argument("--llm_provider", default="openrouter", help="LLM provider name.")
     parser.add_argument("--llm_model", default="deepseek/deepseek-v4-flash", help="LLM model name.")
@@ -67,7 +72,8 @@ def build_argparser() -> argparse.ArgumentParser:
     return parser
 
 
-def build_task(input_csv: Path, source: str, with_sigma_rm: bool):
+def build_task(args):
+    input_csv = Path(args.input_csv)
     if not input_csv.exists():
         raise FileNotFoundError(f"Missing Science 2022 polarization table: {input_csv}")
 
@@ -88,13 +94,13 @@ def build_task(input_csv: Path, source: str, with_sigma_rm: bool):
         f"(dropped {len(df0) - len(df)} rows with missing or invalid data)."
     )
 
-    if source == "all":
+    if args.source == "all":
         pass
-    elif source in (available_sources := sorted(df["source"].unique())):
-        df = df[df["source"].eq(source)]
-        _logger.info(f"Filtered to source={source!r}, {len(df)} rows remain.")
+    elif args.source in (available_sources := sorted(df["source"].unique())):
+        df = df[df["source"].eq(args.source)]
+        _logger.info(f"Filtered to source={args.source!r}, {len(df)} rows remain.")
     else:
-        raise ValueError(f"Source {source!r} not found. Available: {', '.join(available_sources)}")
+        raise ValueError(f"Source {args.source!r} not found. Available: {', '.join(available_sources)}")
 
     X = {}
     X['source'] = df['source'].to_numpy(dtype=str)
@@ -102,7 +108,10 @@ def build_task(input_csv: Path, source: str, with_sigma_rm: bool):
     X['lambda_m'] = 299792458.0 / (X['frequency_mhz'] * 1e6)
     y = {"linear_polarization_fraction": df["linear_polarization_fraction"].to_numpy(dtype=float)}
 
-    if with_sigma_rm:
+    if args.with_p0 and not args.with_sigma_rm:
+        raise ValueError("--with_p0 requires --with_sigma_rm")
+
+    if args.with_sigma_rm:
         df_data = pd.DataFrame(X | y)
         for name, group in df_data.groupby("source"):
             x_group = group["lambda_m"].to_numpy(dtype=float)
@@ -111,32 +120,36 @@ def build_task(input_csv: Path, source: str, with_sigma_rm: bool):
             if len(group) > 1:
                 a, b = np.polyfit(x_group**4, -np.log(y_group), 1)
                 sigma_rm = float(np.sqrt(a / 2.0)) if a > 0 else np.nan
-                # p0 = float(np.exp(-b))
-                y_pred = np.exp(-2 * sigma_rm**2 * x_group ** 4)
+                p0 = float(np.exp(-b))
+                y_pred = p0 * np.exp(-2 * sigma_rm**2 * x_group ** 4)
                 r2 = r2_score(y_group, y_pred)
-                _logger.info(f"Fitted sigma_rm for source {name!r}: sigma_rm={sigma_rm:.6f}, r2={r2:.6f}")
+                _logger.info(f"Fitted source parameters for {name!r}: sigma_rm={sigma_rm:.6f}, p0={p0:.6f}, r2={r2:.6f}")
             elif 0 < y_group[0] <= 1 and x_group[0] > 0:
                 a = float(-np.log(y_group[0]) / (x_group[0] ** 4))
-                # p0 = 1
                 sigma_rm = float(np.sqrt(a / 2.0)) if a >= 0 else np.nan
+                p0 = 1.0
                 r2 = np.nan
-                _logger.info(f"Estimated sigma_rm for single-point source {name!r}: sigma_rm={sigma_rm:.6f}")
+                _logger.info(f"Estimated source parameters for single-point source {name!r}: sigma_rm={sigma_rm:.6f}, p0={p0:.6f}")
             else:
                 sigma_rm = np.nan
-                # p0 = np.nan
+                p0 = np.nan
                 r2 = np.nan
                 _logger.warning(f"Cannot fit sigma_rm for single-point source {name!r}.")
             df_data.loc[df_data['source'].eq(name), 'sigma_rm'] = sigma_rm
+            df_data.loc[df_data['source'].eq(name), 'p0'] = p0
         X["sigma_rm"] = df_data["sigma_rm"].to_numpy(dtype=float)
+        if args.with_p0:
+            X["p0"] = df_data["p0"].to_numpy(dtype=float)
 
     problem = (
         f"This dataset is derived from the frequency-dependent polarization study "
         f"of repeating fast radio bursts reported in Science 2022. "
-        f"It contains measurements for {"all selected repeating FRB sources" if source == "all" else f"the repeating FRB source {source}"}. "
+        f"It contains measurements for {"all selected repeating FRB sources" if args.source == "all" else f"the repeating FRB source {args.source}"}. "
         f"Each row gives an observing frequency and the corresponding debiased degree of linear polarization, normalized so that 1 means 100% linearly polarized. "
         f"The feature frequency_mhz is the observing frequency in MHz. "
         f"The feature lambda_m is the observing wavelength in meters, computed from the speed of light divided by the observing frequency. "
-        f"{"The feature sigma_rm is a source-level parameter in rad m^-2 that quantifies the scatter of rotation measures along different propagation paths; it is constant for all rows from the same source. " if with_sigma_rm else ""}"
+        f"{"The feature sigma_rm is a source-level parameter in rad m^-2 that quantifies the scatter of rotation measures along different propagation paths; it is constant for all rows from the same source. " if args.with_sigma_rm else ""}"
+        f"{"The feature p0 is a source-level baseline linear-polarization fraction before the wavelength-dependent depolarization is applied; it is constant for all rows from the same source. " if args.with_p0 else ""}"
         f"The scientific goal is to find a compact, interpretable mathematical relationship that predicts linear_polarization_fraction from the provided physical variables. "
         f"The relationship should capture how propagation through a magnetized, inhomogeneous plasma changes "
         f"the observed linear polarization as wavelength and, when provided, the rotation-measure-scatter parameter vary. "
@@ -147,11 +160,7 @@ def build_task(input_csv: Path, source: str, with_sigma_rm: bool):
 
 
 def main(args):
-    X, y, problem = build_task(
-        Path(args.input_csv),
-        source=args.source,
-        with_sigma_rm=args.with_sigma_rm,
-    )
+    X, y, problem = build_task(args)
     features = list(X.keys())
     target = next(iter(y))
     context_path = Path(args.save_path) / "context.npz"
