@@ -25,6 +25,7 @@ from __future__ import annotations
 import sys
 import json
 import shlex
+import dotenv
 import logging
 import argparse
 import numpy as np
@@ -39,6 +40,7 @@ from sr_agent.utils import setup_logging, add_minus_flags, add_negation_flags, s
 
 SCRIPT_NAME = Path(__file__).stem
 _logger = logging.getLogger(f"sr_agent.{SCRIPT_NAME}")
+dotenv.load_dotenv()
 
 
 def build_argparser() -> argparse.ArgumentParser:
