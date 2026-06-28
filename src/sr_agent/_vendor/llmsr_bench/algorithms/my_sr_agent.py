@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from sr_agent import SRAgent
 from sr_agent.tools import BaseTool
-from sr_agent.utils import log_exception, tag2ansi
+from sr_agent.utils import format_pareto_front, log_exception, tag2ansi
 from sr_agent._vendor.llmsr_bench.core import SEDTask, SRResult
 
 _logger = getLogger(f'sr_agent.{__name__}')
@@ -21,10 +21,14 @@ _logger = getLogger(f'sr_agent.{__name__}')
 
 def update_parser(parser):
     """更新 parser，添加多项式拟合相关参数"""
+    default_tools = sorted(set(BaseTool.all_registered_names) - {
+        'evaluate_code', 'workspace_code_executor', 'ask_human', 
+        'call_llm', 'workspace_shell', 'create_skill', 'edit_skill'
+    })
     parser.add_argument("--llm_provider", default="openrouter", help="LLM provider name.")
     parser.add_argument("--llm_model", default="qwen/qwen3.5-flash-02-23", help="LLM model name.")
-    parser.add_argument("--tools", default=BaseTool.all_registered_names, type=str, nargs='+', help="Optional list of tools to use. Default is all built-in tools.")
-    parser.add_argument("--ban_tools", default=['evaluate_code', 'workspace_code_executor', 'ask_human', 'call_llm', 'workspace_shell'], type=str, nargs='+', help="Optional list of tools to ban. Takes precedence over --tools.")
+    parser.add_argument("--tools", default=default_tools, type=str, nargs='+', choices=BaseTool.all_registered_names, help="Optional list of tools to use.")
+    parser.add_argument("--ban_tools", default=[], type=str, nargs='+', help="Optional list of tools to ban. Takes precedence over --tools.")
     parser.add_argument("-K", "--local_sample_size", type=int, default=2, help="Number of LLM samples to generate for each branch.")
     parser.add_argument("-L", "--max_refinement_depth", type=int, default=10, help="Maximum agent refinement depth.")
     parser.add_argument("-C", "--global_width", type=int, default=1, help="Number of independent branches per restart loop.")
@@ -121,11 +125,13 @@ def run(args: argparse.Namespace, task: SEDTask) -> SRResult:
         result["money_usage"] = agent.money_counter.count
         result["tools_usage"] = agent.tools_counter.named_count
         # 打印日志
-        log = '\n'.join([f"[red]{k.replace("_", " ").title()}[reset]: {v}" for k, v in result.items()])
+        log = '\n'.join([f"[red]{k.replace("_", " ").title()}[reset]: {v}" for k, v in result.items() if k != 'pareto_front'])
         _logger.note(tag2ansi(
             f'\n[gray]{"=" * 50}[reset]\n'
             "[red bold]Symbolic Regression Result[reset]\n"
             f"{log}\n"
+            f"\n[red bold]Pareto Front[reset]\n"
+            f"{format_pareto_front(result.get('pareto_front'))}\n"
             f'[gray]{"=" * 50}[reset]'
         ))
         # 保存文件

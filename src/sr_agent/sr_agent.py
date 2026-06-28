@@ -231,26 +231,31 @@ class SRAgent(FactoryMixin):
                         self.named_timer.add('log_info')
                         self.total_timer.add()
 
+                        # Step 7: 记录搜索过程
+                        self.record_search(topk_records, R=R, L=L, C=C)
+                        self.named_timer.add('record_search')
+                        self.total_timer.add()
+
                         if topk_records and topk_records[0][-1]['mse'] == 0.0:
                             raise FitEarlyStop()
 
             _logger.note(f"Finished all iterations. Returning best result.")
             best_record = topk_records[0][-1] if topk_records else {}
-            return {f'best_{k}': v for k, v in best_record.items()} | {'status': 'completed', 'progress': self.format_progress(R, L, C)}
+            return {f'best_{k}': v for k, v in best_record.items()} | {'status': 'completed', 'progress': self.format_progress(R, L, C), 'pareto_front': self.get_pareto_front(topk_records)}
         
         except FitEarlyStop as e:
             _logger.note(f"Early stopping triggered by perfect solution. Returning best result.")
             best_record = topk_records[0][-1] if topk_records else {}
-            return {f'best_{k}': v for k, v in best_record.items()} | {'status': 'early_stopped', 'progress': self.format_progress(R, L, C)}
+            return {f'best_{k}': v for k, v in best_record.items()} | {'status': 'early_stopped', 'progress': self.format_progress(R, L, C), 'pareto_front': self.get_pareto_front(topk_records)}
 
         except KeyboardInterrupt as e:
             best_record = topk_records[0][-1] if topk_records else {}
-            e.partial_result = {f'best_{k}': v for k, v in best_record.items()} | {'status': 'interrupted', 'progress': self.format_progress(R, L, C)}
+            e.partial_result = {f'best_{k}': v for k, v in best_record.items()} | {'status': 'interrupted', 'progress': self.format_progress(R, L, C), 'pareto_front': self.get_pareto_front(topk_records)}
             raise
 
         except Exception as e:
             best_record = topk_records[0][-1] if topk_records else {}
-            e.partial_result = {f'best_{k}': v for k, v in best_record.items()} | {'status': 'failed', 'progress': self.format_progress(R, L, C)}
+            e.partial_result = {f'best_{k}': v for k, v in best_record.items()} | {'status': 'failed', 'progress': self.format_progress(R, L, C), 'pareto_front': self.get_pareto_front(topk_records)}
             raise
 
     def build_initial_prompt(self, problem_description, X, y, restart_records):
@@ -275,9 +280,15 @@ class SRAgent(FactoryMixin):
         initial_prompt.append({
             "role": "system",
             "content": (
-                "You are a Symbolic Regression Agent. Your goal is to discover mathematical formulas "
-                "that explain the relationship between feature variables and the target variable. "
-                "DO NOT be satisfied with an accurate but complex formula — prefer simple, interpretable expressions. "
+                f"You are a Symbolic Regression Agent. Your goal is to discover mathematical formulas "
+                f"that explain the relationship between feature variables and the target variable. "
+                f"DO NOT be satisfied with an accurate but complex formula — prefer simple, interpretable expressions. "
+                f"You have at most {self.max_refinement_depth} refinement rounds in each conversation branch. "
+                f"Plan tool use within this budget: use early rounds for targeted exploration, keep concrete "
+                f"candidate formulas as the budget shrinks, and avoid open-ended searches near the end. "
+                f"At the final refinement round (L = {self.max_refinement_depth}), stop exploration and submit the best available "
+                f"target formula using the most appropriate final-answer mechanism available; do not wait "
+                f"for another reminder after the final round. "
                 f"{mse_goal}"
             )
         })
@@ -317,7 +328,30 @@ class SRAgent(FactoryMixin):
 
     def build_prompt(self, buffer: List[Dict[str, Any]], R: int, L: int, C: int) -> List[Dict[str, Any]]:
         """根据 Buffer 构建 LLM Prompt。"""
-        prompt = buffer
+        prompt = deepcopy(buffer)
+        remaining_rounds = self.max_refinement_depth - L
+        progress_line = (
+            f"Current progress: refinement round L={L}/{self.max_refinement_depth}. "
+            f"After this response, {remaining_rounds} refinement round(s) remain in this branch."
+        )
+        if remaining_rounds > 1:
+            policy = (
+                "Plan tool use within the remaining refinement budget. "
+                "Prefer targeted actions that can lead to a simpler and lower-MSE formula."
+            )
+        elif remaining_rounds == 1:
+            policy = (
+                "Only one refinement round remains after this response. Use at most a tightly targeted "
+                "tool call now, and preserve a concrete formula candidate so the next round can submit it."
+            )
+        else:
+            policy = (
+                "This is the final refinement round for this branch. Do not spend this response on "
+                "new data exploration, broad searches, or diagnostic-only evaluations. Submit or state "
+                "your best available target formula now using the final-answer mechanism available in "
+                "this environment, with a brief justification if text is required."
+            )
+        prompt.append({"role": "user", "content": f"[Iteration status]\n{progress_line} {policy}"})
         _logger.info(f"Built prompt with {len(prompt)} messages.")
         logs = []
         for msg in prompt:
@@ -456,12 +490,11 @@ class SRAgent(FactoryMixin):
         for K in range(1, len(response_list) + 1):
             for act, res in zip(response_list[K - 1][1], results_list[K - 1]):
                 if res.result.get('is_candidate'):
+                    assert 'mse' in res.result['metrics'], "Tool result must contain 'mse' in metrics for candidate formulas."
+                    assert 'complexity' in res.result['metrics'], "Tool result must contain 'complexity' in metrics for candidate formulas."
                     record = {
                         "formula": res.result.get('formula') or act.params.get('eq'),
-                        "mse": res.result['metrics']['mse'],
-                        "rmse": res.result['metrics'].get('rmse'),
-                        "mae": res.result['metrics'].get('mae'),
-                        "r2": res.result['metrics'].get('r2'),
+                        **res.result['metrics'],
                         "node_id": self.search_record_writer.node_id(R=R, C=C, L=L, K=K),
                     }
                     priority = res.result['metrics']['mse'] # 按照 mse 排序 (越小越重要)
@@ -491,6 +524,19 @@ class SRAgent(FactoryMixin):
         }
         msg = "[gray] | [reset]".join(f"[blue]{k}[reset]={v}" for k, v in log.items())
         _logger.info(tag2ansi(msg))
+
+    def record_search(self, topk_records, R: int, L: int, C: int):
+        """记录本轮搜索迭代的原始数据和选中分支信息，供后续分析和可视化使用。"""
+        if self.save_path is None:
+            return
+        pareto_front = self.get_pareto_front(topk_records)
+        with open(Path(self.save_path) / 'search_record.jsonl', 'a') as f:
+            json.dump({
+                "progress": self.format_progress(R, L, C),
+                "coord": {"R": R, "C": C, "L": L},
+                'pareto_front': pareto_front,
+            }, f)
+            f.write('\n')
 
     def record_llm_result(self, llm_result, R: int, L: int, C: int) -> Dict[str, Any] | None:
         """记录最近一次 LLM 请求的返回值和用量统计。"""
@@ -573,3 +619,13 @@ class SRAgent(FactoryMixin):
 
     def format_progress(self, R: int, L: int, C: int):
         return f'(R={R}/{self.max_restart_loop}) × (C={C}/{self.global_width}) × (L={L}/{self.max_refinement_depth}) × (K={self.local_sample_size})'
+
+    def get_pareto_front(self, topk_records):
+        """从 top-k 结果中提取 Pareto 前沿。"""
+        pareto_front = []
+        current_complexity = float('inf')
+        for _, _, record in sorted(topk_records):
+            if record['complexity'] < current_complexity:
+                pareto_front.append(record)
+                current_complexity = record['complexity']
+        return pareto_front
