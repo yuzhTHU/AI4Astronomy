@@ -58,8 +58,9 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--drop_missing", action="store_true", default=True, help="Drop rows with missing values in selected columns.")
     parser.add_argument("--seed", type=int, default=-1, help="Random seed. Default -1 means using current system time.")
     parser.add_argument("--llm_provider", default="openrouter", help="LLM provider name.")
-    parser.add_argument("--llm_model", default="qwen/qwen3.5-flash-02-23", help="LLM model name.")
+    parser.add_argument("--llm_model", default="deepseek/deepseek-v4-pro", help="LLM model name.")
     parser.add_argument("--tools", default=default_tools, type=str, nargs='+', help="Optional list of tools to use. Default is all built-in tools.")
+    parser.add_argument("--ban_tools", default=[], type=str, nargs='+', help="Optional list of tools to ban. Takes precedence over --tools.")
     parser.add_argument("-K", "--local_sample_size", type=int, default=2, help="Number of LLM samples to generate for each branch.")
     parser.add_argument("-L", "--max_refinement_depth", type=int, default=10, help="Maximum agent refinement depth.")
     parser.add_argument("-C", "--global_width", type=int, default=1, help="Number of independent branches per restart loop.")
@@ -151,10 +152,12 @@ def main(args: argparse.Namespace) -> dict:
     np.savez(context_path, data=(X | y), target=args.target, problem_description=problem_description)
     _logger.note(f"Saved context.npz to {context_path}, start running SRAgent...")
 
+    tools = [tool for tool in args.tools if tool not in args.ban_tools]
+    _logger.note(tag2ansi(f"Using tools: [green bold]{', '.join(tools)}[reset]"))
     agent = SRAgent(
         llm_provider=args.llm_provider,
         llm_model=args.llm_model,
-        tools=args.tools,
+        tools=tools,
         local_sample_size=args.local_sample_size,
         max_refinement_depth=args.max_refinement_depth,
         global_width=args.global_width,

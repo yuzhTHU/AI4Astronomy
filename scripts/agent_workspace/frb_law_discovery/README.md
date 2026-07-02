@@ -146,3 +146,11 @@ SRAgent 通常希望发现一种可以写成数学方程的模式，形如 `a * 
 两类候选都会返回 `formula`、`metrics` 和 `is_candidate`，从而参与 best formula 和 pareto front 的比较。区别在于复杂度定义：
 - `evaluate_formula`：复杂度通常是数学表达式中的符号/节点数量，较容易解释。
 - `evaluate_code`：Python 程序的复杂度不易精确定义。当前实现将复杂度近似为 `model_func` 和 `predict_func` 代码字符总数。虽然这会使得其复杂度远高于普通数学公式，考虑到 Python 程序的表达能力通常更强、拟合效果通常更好，因此在 pareto front 中仍然有可能被选中。
+
+
+## Hints
+
+- 调用 SRAgent 时注意，太低的预算（例如 --R 1 --C 1 --L 2 --K 1）不可能发现有效的规律，只会白白浪费时间和资源。建议至少使用 --R 2 --C 2 --L 10 --K 2 这样的组合，也可以通过增加 --R/--C/--L/--K 进一步增加搜索预算。
+- 目标规律可能难以被数学公式描述，这种时候可能必须使用 `evaluate_code`。如果你发现 SRAgent 总是倾向于使用 `evaluate_formula` 而忽略 `evaluate_code`，可以尝试：
+    * 通过 `python run_sr_agent.py --ban_tools evaluate_formula` 禁用 `evaluate_formula`。
+    * 在 `python run_sr_agent.py --problem_description ...` 中明确说明目标规律可能无法用数学公式描述，鼓励使用 `evaluate_code`。

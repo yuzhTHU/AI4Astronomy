@@ -22,7 +22,7 @@ _logger = getLogger(f'sr_agent.{__name__}')
 def update_parser(parser):
     """更新 parser，添加多项式拟合相关参数"""
     default_tools = sorted(set(BaseTool.all_registered_names) - {
-        'evaluate_code', 'workspace_code_executor', 'ask_human', 
+        'evaluate_code', 'workspace_code_executor', 'ask_human', 'submit_formula',
         'call_llm', 'workspace_shell', 'create_skill', 'edit_skill'
     })
     parser.add_argument("--llm_provider", default="openrouter", help="LLM provider name.")
