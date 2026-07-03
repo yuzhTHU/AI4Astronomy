@@ -150,5 +150,12 @@ SRAgent 通常希望发现一种可以写成数学方程的模式，形如 `a * 
 
 ## Hints
 
+- 本目录没有 AGENTS.md 或者 CLAUDE.md 供你参考，不需要试图读它们，只关注本目录内的文件即可。
 - 调用 SRAgent 时注意，太低的预算（例如 --R 1 --C 1 --L 2 --K 1）不可能发现有效的规律，只会白白浪费时间和资源。建议至少使用 --R 2 --C 2 --L 10 --K 2 这样的组合，也可以通过增加 --R/--C/--L/--K 进一步增加搜索预算。
 - 目标规律可能难以被数学公式描述，建议通过 `python run_sr_agent.py --ban_tools evaluate_formula` 禁用 `evaluate_formula`，以迫使 SRAgent 使用表达能力更强的 `evaluate_code` 提交结果。
+- 本任务主要是想找到跨 FRB source 通用的偏振--频率规律，具体而言：
+    - 目标是找到 `linear_polarization` 关于 `FRB` 和 `center_frequency_ghz` 的规律
+    - 规律的公式形式应在多个 FRB source 之间共享
+    - 公式中的某些参数值允许依赖具体 FRB source 而不同
+    - 由于 `FRB` 是非数值字段，且 “依赖于 FRB source 而不同的参数值” 很难通过 `evaluate_formula` 表达，建议 ban 掉 `evaluate_formula`，迫使 SRAgent 使用 `evaluate_code` 提交结果。
+    - 除了 `evaluate_formula` 之外，`polynomial_fit`、`call_sindy`、`call_pysr` 等工具也无法表达这种规律，除非你相信添加它们会有帮助，否则建议 ban 掉它们。
