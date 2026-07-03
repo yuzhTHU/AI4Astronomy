@@ -151,6 +151,4 @@ SRAgent 通常希望发现一种可以写成数学方程的模式，形如 `a * 
 ## Hints
 
 - 调用 SRAgent 时注意，太低的预算（例如 --R 1 --C 1 --L 2 --K 1）不可能发现有效的规律，只会白白浪费时间和资源。建议至少使用 --R 2 --C 2 --L 10 --K 2 这样的组合，也可以通过增加 --R/--C/--L/--K 进一步增加搜索预算。
-- 目标规律可能难以被数学公式描述，这种时候可能必须使用 `evaluate_code`。如果你发现 SRAgent 总是倾向于使用 `evaluate_formula` 而忽略 `evaluate_code`，可以尝试：
-    * 通过 `python run_sr_agent.py --ban_tools evaluate_formula` 禁用 `evaluate_formula`。
-    * 在 `python run_sr_agent.py --problem_description ...` 中明确说明目标规律可能无法用数学公式描述，鼓励使用 `evaluate_code`。
+- 目标规律可能难以被数学公式描述，建议通过 `python run_sr_agent.py --ban_tools evaluate_formula` 禁用 `evaluate_formula`，以迫使 SRAgent 使用表达能力更强的 `evaluate_code` 提交结果。
